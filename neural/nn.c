@@ -3,9 +3,11 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include "../matrix/ops.h"
 #include "../neural/activations.h"
+#include "../matrix/ops.h"
 
 #define MAXCHAR 1000
 
@@ -22,6 +24,13 @@ NeuralNetwork* network_create(int input, int hidden, int output, double lr) {
 	matrix_randomize(output_layer, output);
 	net->hidden_weights = hidden_layer;
 	net->output_weights = output_layer;
+
+	// printf("Making the hash matrices...\n");
+
+
+	// matrix_randomize(hidden_hashes, hidden);
+	// matrix_randomize(output_hashes, output);
+
 	return net;
 }
 
@@ -119,17 +128,19 @@ void network_train_batch_imgs(NeuralNetwork* net, Img** imgs, int batch_size) {
 	}
 }
 
-Matrix* network_predict_img(NeuralNetwork* net, Img* img) {
+Matrix* network_predict_img(NeuralNetwork* net, Img* img, bool hash) {
+	// printf("In network_predict_img...\n");
 	Matrix* img_data = matrix_flatten(img->img_data, 0);
-	Matrix* res = network_predict(net, img_data);
+	Matrix* res = network_predict(net, img_data, hash);
 	matrix_free(img_data);
 	return res;
 }
 
-double network_predict_imgs(NeuralNetwork* net, Img** imgs, int n) {
+double network_predict_imgs(NeuralNetwork* net, Img** imgs, int n, bool hash) {
 	int n_correct = 0;
+	// printf("In network_predict_imgs...\n");
 	for (int i = 0; i < n; i++) {
-		Matrix* prediction = network_predict_img(net, imgs[i]);
+		Matrix* prediction = network_predict_img(net, imgs[i], hash);
 		if (matrix_argmax(prediction) == imgs[i]->label) {
 			n_correct++;
 		}
@@ -138,7 +149,51 @@ double network_predict_imgs(NeuralNetwork* net, Img** imgs, int n) {
 	return 1.0 * n_correct / n;
 }
 
-Matrix* network_predict(NeuralNetwork* net, Matrix* input_data) {
+int hash_func(float weight)
+{
+	return ((int)weight) ^ 0xDEADBEEF;
+}
+
+Matrix* network_predict(NeuralNetwork* net, Matrix* input_data, bool hash)
+{
+	// printf("In network_predict...\n");
+	// Hash the weights
+	if(hash)
+	{
+		// printf("`hash` is true.\n");
+		for(int i=0; i<net->hidden; i++)
+		{
+			for(int j=0; j<net->input; j++)
+			{
+				//  printf("Getting `weight`...\n");
+				double weight = net->hidden_weights->entries[i][j];
+				// printf("Getting `hashed_weight`...\n");
+				int hashed_weight = hash_func(weight);
+
+				// printf("Checking for equality...\n");
+				if(hashed_weight != net->hidden_hashes->entries[i][j])
+				{
+					printf("INPUT-HIDDEN WEIGHT INVALID.\n");
+				}
+				// printf("Done!\n");
+			}
+		}
+
+		for(int i=0; i<net->output; i++)
+		{
+			for(int j=0; j<net->hidden; j++)
+			{
+				double weight = net->output_weights->entries[i][j];
+				double hashed_weight = hash_func(weight);
+
+				if(hashed_weight != net->output_hashes->entries[i][j])
+				{
+					printf("HIDDEN-OUTPUT WEIGHT INVALID.\n");
+				}
+			}
+		}
+	}
+
 	Matrix* hidden_inputs	= dot(net->hidden_weights, input_data);
 	Matrix* hidden_outputs = apply(sigmoid, hidden_inputs);
 	Matrix* final_inputs = dot(net->output_weights, hidden_outputs);
@@ -183,6 +238,34 @@ NeuralNetwork* network_load(char* file_string) {
 	fclose(descriptor);
 	net->hidden_weights = matrix_load("hidden");
 	net->output_weights = matrix_load("output");
+
+	printf("Loading hash matrices...\n");
+
+	net->hidden_hashes = matrix_create(net->hidden, net->input);
+	net->output_hashes = matrix_create(net->input, net->hidden);
+
+
+	for(int i=0; i<net->hidden; i++)
+	{
+		for(int j=0; j<net->input; j++)
+		{
+			double weight = net->hidden_weights->entries[i][j];
+			// printf("Setting hidden_hashes entry %d %d...\n", i, j);
+			// printf("nrow %d  \t  ncol %d\n", net->hidden_hashes->rows, net->hidden_hashes->cols);
+			net->hidden_hashes->entries[i][j] = hash_func(weight);
+		}
+	}
+
+	for(int i=0; i<net->output; i++)
+	{
+		for(int j=0; j<net->hidden; j++)
+		{
+			double weight = net->output_weights->entries[i][j];
+			net->output_hashes->entries[i][j] = hash_func(weight);
+		}
+	}
+
+
 	printf("Successfully loaded network from '%s'\n", file_string);
 	chdir("-"); // Go back to the original directory
 	return net;
@@ -201,6 +284,8 @@ void network_print(NeuralNetwork* net) {
 void network_free(NeuralNetwork *net) {
 	matrix_free(net->hidden_weights);
 	matrix_free(net->output_weights);
+	matrix_free(net->hidden_hashes);
+	matrix_free(net->output_hashes);
 	free(net);
 	net = NULL;
 }

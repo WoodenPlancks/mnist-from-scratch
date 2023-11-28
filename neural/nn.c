@@ -5,9 +5,11 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdint.h>
 #include "../matrix/ops.h"
 #include "../neural/activations.h"
 #include "../matrix/ops.h"
+#include "../util/asm_commands.h"
 
 #define MAXCHAR 1000
 
@@ -24,12 +26,6 @@ NeuralNetwork* network_create(int input, int hidden, int output, double lr) {
 	matrix_randomize(output_layer, output);
 	net->hidden_weights = hidden_layer;
 	net->output_weights = output_layer;
-
-	// printf("Making the hash matrices...\n");
-
-
-	// matrix_randomize(hidden_hashes, hidden);
-	// matrix_randomize(output_hashes, output);
 
 	return net;
 }
@@ -149,48 +145,46 @@ double network_predict_imgs(NeuralNetwork* net, Img** imgs, int n, bool hash) {
 	return 1.0 * n_correct / n;
 }
 
-int hash_func(float weight)
+double hash_func(double weight)
 {
-	return ((int)weight) ^ 0xDEADBEEF;
+	return ((uint64_t)weight) ^ 0xDEADBEEF;
+}
+
+bool check_weights(NeuralNetwork* net)
+{
+	for(int i=0; i<net->hidden; i++)
+	{
+		for(int j=0; j<net->input; j++)
+		{
+			if(hash_func(net->hidden_weights->entries[i][j]) != net->hidden_hashes->entries[i][j])
+			{
+				return false;
+			}
+		}
+	}
+
+	for(int i=0; i<net->output; i++)
+	{
+		for(int j=0; j<net->hidden; j++)
+		{
+			if(hash_func(net->output_weights->entries[i][j]) != net->output_hashes->entries[i][j])
+			{
+				return false;
+			}
+		}
+	}
+	
+	return true;
 }
 
 Matrix* network_predict(NeuralNetwork* net, Matrix* input_data, bool hash)
 {
-	// printf("In network_predict...\n");
 	// Hash the weights
 	if(hash)
 	{
-		// printf("`hash` is true.\n");
-		for(int i=0; i<net->hidden; i++)
+		if(!check_weights(net))
 		{
-			for(int j=0; j<net->input; j++)
-			{
-				//  printf("Getting `weight`...\n");
-				double weight = net->hidden_weights->entries[i][j];
-				// printf("Getting `hashed_weight`...\n");
-				int hashed_weight = hash_func(weight);
-
-				// printf("Checking for equality...\n");
-				if(hashed_weight != net->hidden_hashes->entries[i][j])
-				{
-					printf("INPUT-HIDDEN WEIGHT INVALID.\n");
-				}
-				// printf("Done!\n");
-			}
-		}
-
-		for(int i=0; i<net->output; i++)
-		{
-			for(int j=0; j<net->hidden; j++)
-			{
-				double weight = net->output_weights->entries[i][j];
-				double hashed_weight = hash_func(weight);
-
-				if(hashed_weight != net->output_hashes->entries[i][j])
-				{
-					printf("HIDDEN-OUTPUT WEIGHT INVALID.\n");
-				}
-			}
+			printf("WEIGHTS ARE INVALID.");
 		}
 	}
 
@@ -223,7 +217,7 @@ void network_save(NeuralNetwork* net, char* file_string) {
 	chdir("-"); // Go back to the orignal directory
 }
 
-NeuralNetwork* network_load(char* file_string) {
+NeuralNetwork* network_load(char* file_string, bool hash) {
 	NeuralNetwork* net = malloc(sizeof(NeuralNetwork));
 	char entry[MAXCHAR];
 	chdir(file_string);
@@ -241,30 +235,27 @@ NeuralNetwork* network_load(char* file_string) {
 
 	printf("Loading hash matrices...\n");
 
-	net->hidden_hashes = matrix_create(net->hidden, net->input);
-	net->output_hashes = matrix_create(net->input, net->hidden);
-
-
-	for(int i=0; i<net->hidden; i++)
+	if(hash)
 	{
-		for(int j=0; j<net->input; j++)
+		net->hidden_hashes = matrix_create(net->hidden, net->input);
+		net->output_hashes = matrix_create(net->input, net->hidden);
+
+		for(int i=0; i<net->hidden; i++)
 		{
-			double weight = net->hidden_weights->entries[i][j];
-			// printf("Setting hidden_hashes entry %d %d...\n", i, j);
-			// printf("nrow %d  \t  ncol %d\n", net->hidden_hashes->rows, net->hidden_hashes->cols);
-			net->hidden_hashes->entries[i][j] = hash_func(weight);
+			for(int j=0; j<net->input; j++)
+			{
+				net->hidden_hashes->entries[i][j] = hash_func(net->hidden_weights->entries[i][j]);
+			}
+		}
+
+		for(int i=0; i<net->output; i++)
+		{
+			for(int j=0; j<net->hidden; j++)
+			{
+				net->output_hashes->entries[i][j] = hash_func(net->output_weights->entries[i][j]);
+			}
 		}
 	}
-
-	for(int i=0; i<net->output; i++)
-	{
-		for(int j=0; j<net->hidden; j++)
-		{
-			double weight = net->output_weights->entries[i][j];
-			net->output_hashes->entries[i][j] = hash_func(weight);
-		}
-	}
-
 
 	printf("Successfully loaded network from '%s'\n", file_string);
 	chdir("-"); // Go back to the original directory
@@ -281,11 +272,14 @@ void network_print(NeuralNetwork* net) {
 	matrix_print(net->output_weights);
 }
 
-void network_free(NeuralNetwork *net) {
+void network_free(NeuralNetwork *net, bool hash) {
 	matrix_free(net->hidden_weights);
 	matrix_free(net->output_weights);
-	matrix_free(net->hidden_hashes);
-	matrix_free(net->output_hashes);
+	if(hash)
+	{
+		matrix_free(net->hidden_hashes);
+		matrix_free(net->output_hashes);
+	}
 	free(net);
 	net = NULL;
 }

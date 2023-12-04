@@ -12,6 +12,8 @@
 #include "../util/asm_commands.h"
 
 #define MAXCHAR 1000
+#define WEIGHTS_PER_HASH 1
+#define HASH_DIM (net->input * net->hidden)/(WEIGHTS_PER_HASH) + 1
 
 // 784, 300, 10
 NeuralNetwork* network_create(int input, int hidden, int output, double lr) {

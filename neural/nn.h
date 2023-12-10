@@ -12,8 +12,8 @@ typedef struct {
 	double learning_rate;
 	Matrix* hidden_weights;
 	Matrix* output_weights;
-	Matrix* hidden_hashes;
-	Matrix* output_hashes;
+	uint64_t* hidden_hashes;
+	uint64_t* output_hashes;
 } NeuralNetwork;
 
 NeuralNetwork* network_create(int input, int hidden, int output, double lr);

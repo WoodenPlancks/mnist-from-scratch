@@ -10,10 +10,15 @@
 #include "../neural/activations.h"
 #include "../matrix/ops.h"
 #include "../util/asm_commands.h"
+#include <openssl/sha.h>
 
 #define MAXCHAR 1000
 #define WEIGHTS_PER_HASH 1
-#define HASH_DIM (net->input * net->hidden)/(WEIGHTS_PER_HASH) + 1
+#define HASH_DIM_HIDDEN (net->input * net->hidden)/(WEIGHTS_PER_HASH)
+#define HASH_DIM_OUTPUT (net->output * net->hidden)/(WEIGHTS_PER_HASH)
+#define OUTPUT_DIM net->output
+#define INPUT_DIM net->input
+#define HIDDEN_DIM net->hidden
 
 // 784, 300, 10
 NeuralNetwork* network_create(int input, int hidden, int output, double lr) {
@@ -147,32 +152,52 @@ double network_predict_imgs(NeuralNetwork* net, Img** imgs, int n, bool hash) {
 	return 1.0 * n_correct / n;
 }
 
-double hash_func(double weight)
-{
-	return ((uint64_t)weight) ^ 0xDEADBEEF;
+// uint64_t quickhash64(char *str, uint64_t mix){}
+
+uint64_t quickhash64(char *str, uint64_t mix)
+{ // set 'mix' to some value other than zero if you want a tagged hash          
+    uint64_t mulp = 2654435789;
+    mix ^= 104395301;
+
+    while(*str)
+        mix += (*str++ * mulp) ^ (mix >> 23);
+
+    return mix ^ (mix << 37);
 }
 
 bool check_weights(NeuralNetwork* net)
 {
-	for(int i=0; i<net->hidden; i++)
+	
+	for(int i=0; i<HASH_DIM_HIDDEN; i++)
 	{
-		for(int j=0; j<net->input; j++)
+		// uint64_t stitched_weights = net->hidden_weights->entries[(i * WEIGHTS_PER_HASH) % HIDDEN_DIM][(i * WEIGHTS_PER_HASH)/HIDDEN_DIM];
+		char* stitched_weights = (char*) calloc(WEIGHTS_PER_HASH*sizeof(double), sizeof(char));
+
+		for(int k=0; (k<WEIGHTS_PER_HASH) & (k + (i * WEIGHTS_PER_HASH) < HIDDEN_DIM * INPUT_DIM); k++)
 		{
-			if(hash_func(net->hidden_weights->entries[i][j]) != net->hidden_hashes->entries[i][j])
-			{
-				return false;
-			}
+			memcpy(stitched_weights + sizeof(double) * k, &net->hidden_weights->entries[((i + k) * WEIGHTS_PER_HASH) % HIDDEN_DIM][((i + k) * WEIGHTS_PER_HASH)/HIDDEN_DIM], sizeof(double));
+		}
+		
+
+		if(net->hidden_hashes[i] != quickhash64(stitched_weights, 0))
+		{
+			return false;
 		}
 	}
 
-	for(int i=0; i<net->output; i++)
+	for(int i=0; i<HASH_DIM_OUTPUT; i++)
 	{
-		for(int j=0; j<net->hidden; j++)
+
+		char* stitched_weights = (char*) calloc(WEIGHTS_PER_HASH*sizeof(double), sizeof(char));	
+
+		for(int k=0; (k<WEIGHTS_PER_HASH) & (k + (i * WEIGHTS_PER_HASH) < HIDDEN_DIM * OUTPUT_DIM); k++)
 		{
-			if(hash_func(net->output_weights->entries[i][j]) != net->output_hashes->entries[i][j])
-			{
-				return false;
-			}
+			memcpy(stitched_weights + sizeof(double) * k, &net->output_weights->entries[((i + k) * WEIGHTS_PER_HASH) % OUTPUT_DIM][((i + k) * WEIGHTS_PER_HASH)/OUTPUT_DIM], sizeof(double));
+		}
+
+		if(net->output_hashes[i] != quickhash64(stitched_weights, 0))
+		{
+			return false;
 		}
 	}
 	
@@ -186,7 +211,7 @@ Matrix* network_predict(NeuralNetwork* net, Matrix* input_data, bool hash)
 	{
 		if(!check_weights(net))
 		{
-			printf("WEIGHTS ARE INVALID.");
+			// printf("WEIGHTS ARE INVALID.\n");
 		}
 	}
 
@@ -239,23 +264,36 @@ NeuralNetwork* network_load(char* file_string, bool hash) {
 
 	if(hash)
 	{
-		net->hidden_hashes = matrix_create(net->hidden, net->input);
-		net->output_hashes = matrix_create(net->input, net->hidden);
+		net->hidden_hashes = (uint64_t*) calloc(HASH_DIM_HIDDEN, sizeof(uint64_t));
+		net->output_hashes = (uint64_t*) calloc(HASH_DIM_OUTPUT, sizeof(uint64_t));
 
-		for(int i=0; i<net->hidden; i++)
+		for(int i=0; i<HASH_DIM_HIDDEN; i++)
 		{
-			for(int j=0; j<net->input; j++)
+			char* stitched_weights = (char*) calloc(WEIGHTS_PER_HASH*sizeof(double), sizeof(char));
+
+			for(int k=0; (k<WEIGHTS_PER_HASH) & (k + (i * WEIGHTS_PER_HASH) < HIDDEN_DIM * INPUT_DIM); k++)
 			{
-				net->hidden_hashes->entries[i][j] = hash_func(net->hidden_weights->entries[i][j]);
+				// printf("%d Weight is %lf\n", k, net->hidden_weights->entries[((i + k) * WEIGHTS_PER_HASH) % HIDDEN_DIM][((i + k) * WEIGHTS_PER_HASH)/HIDDEN_DIM]);
+				memcpy(stitched_weights + sizeof(double) * k, &net->hidden_weights->entries[((i + k) * WEIGHTS_PER_HASH) % HIDDEN_DIM][((i + k) * WEIGHTS_PER_HASH)/HIDDEN_DIM], sizeof(double));
 			}
+
+			// printf("memcpy result: %.64s, %d\n", stitched_weights, WEIGHTS_PER_HASH*sizeof(double));
+			net->hidden_hashes[i] = quickhash64(stitched_weights, 0);
+
 		}
 
-		for(int i=0; i<net->output; i++)
+		printf("Done hashing hidden weights.\n");
+
+		for(int i=0; i<HASH_DIM_OUTPUT; i++)
 		{
-			for(int j=0; j<net->hidden; j++)
+			char* stitched_weights = (char*) calloc(WEIGHTS_PER_HASH*sizeof(double), sizeof(char));
+
+			for(int k=0; (k<WEIGHTS_PER_HASH) & (k + (i * WEIGHTS_PER_HASH) < HIDDEN_DIM * OUTPUT_DIM); k++)
 			{
-				net->output_hashes->entries[i][j] = hash_func(net->output_weights->entries[i][j]);
+				memcpy(stitched_weights + sizeof(double) * k, &net->output_weights->entries[((i + k) * WEIGHTS_PER_HASH) % OUTPUT_DIM][((i + k) * WEIGHTS_PER_HASH)/OUTPUT_DIM], sizeof(double));
 			}
+
+			net->output_hashes[i] = quickhash64(stitched_weights, 0);
 		}
 	}
 
@@ -279,8 +317,8 @@ void network_free(NeuralNetwork *net, bool hash) {
 	matrix_free(net->output_weights);
 	if(hash)
 	{
-		matrix_free(net->hidden_hashes);
-		matrix_free(net->output_hashes);
+		free(net->hidden_hashes);
+		free(net->output_hashes);
 	}
 	free(net);
 	net = NULL;

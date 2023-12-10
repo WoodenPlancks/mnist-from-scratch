@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define NUMBER_RUNS 10
+#define NUMBER_RUNS 1
 #define NUMBER_IMGS 1000
 #define RUN_HASH true
 
